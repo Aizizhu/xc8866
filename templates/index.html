@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>交友信息</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 20px;
+    }
+    input {
+      margin-right: 10px;
+      padding: 5px 8px;
+      width: 120px;
+    }
+    button {
+      padding: 6px 12px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-top: 20px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: center;
+    }
+    img {
+      max-width: 100px;
+      max-height: 100px;
+      cursor: pointer;
+      transition: transform 0.3s ease;
+    }
+    img:hover {
+      transform: scale(1.1);
+    }
+    a {
+      color: #0366d6;
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+
+    #imgModal {
+      display: none;
+      position: fixed;
+      z-index: 9999;
+      left: 0; top: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.8);
+      justify-content: center;
+      align-items: center;
+    }
+
+    #imgModal img {
+      max-width: 90vw;
+      max-height: 90vh;
+      box-shadow: 0 0 10px #000;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h2>数据查询</h2>
+  <input type="text" id="global" placeholder="关键词" />
+  <input type="number" id="price_min" placeholder="最低价格" />
+  <input type="number" id="price_max" placeholder="最高价格" />
+  <button id="searchBtn">搜索</button>
+
+  <table id="resultTable">
+    <thead>
+      <tr>
+        <th>标题</th>
+        <th>价格</th>
+        <th>QQ</th>
+        <th>微信</th>
+        <th>手机</th>
+        <th>图片1</th>
+        <th>图片2</th>
+        <th>图片3</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <div id="imgModal" onclick="closeModal()">
+    <img id="modalImg" src="" alt="放大图片" />
+  </div>
+
+  <script>
+    const searchBtn = document.getElementById('searchBtn');
+    const tbody = document.querySelector('#resultTable tbody');
+    const modal = document.getElementById('imgModal');
+    const modalImg = document.getElementById('modalImg');
+
+    function search() {
+      const global = document.getElementById('global').value.trim();
+      const price_min = document.getElementById('price_min').value.trim();
+      const price_max = document.getElementById('price_max').value.trim();
+
+      const params = new URLSearchParams();
+      if (global) params.append('global', global);
+      if (price_min) params.append('price_min', price_min);
+      if (price_max) params.append('price_max', price_max);
+
+      fetch(`/api/data?${params.toString()}`)
+        .then((res) => res.json())
+        .then((data) => {
+          tbody.innerHTML = '';
+
+          if (!data.length) {
+            tbody.innerHTML = '<tr><td colspan="8">无匹配数据</td></tr>';
+            return;
+          }
+
+          data.forEach((item) => {
+            const tr = document.createElement('tr');
+
+            tr.innerHTML = `
+              <td><a href="${item['帖子链接'] || '#'}" target="_blank" rel="noopener noreferrer">${item['标题'] || ''}</a></td>
+              <td>${item['价格'] || ''}</td>
+              <td>${item['QQ'] || ''}</td>
+              <td>${item['微信'] || ''}</td>
+              <td>${item['手机'] || ''}</td>
+              <td>${item['图片1'] ? `<img src="${item['图片1']}" alt="图片1" />` : ''}</td>
+              <td>${item['图片2'] ? `<img src="${item['图片2']}" alt="图片2" />` : ''}</td>
+              <td>${item['图片3'] ? `<img src="${item['图片3']}" alt="图片3" />` : ''}</td>
+            `;
+
+            tr.querySelectorAll('img').forEach(img => {
+              img.style.cursor = 'pointer';
+              img.addEventListener('click', () => {
+                modalImg.src = img.src;
+                modal.style.display = 'flex';
+              });
+            });
+
+            tbody.appendChild(tr);
+          });
+        })
+        .catch(() => {
+          tbody.innerHTML = '<tr><td colspan="8">请求出错，请稍后重试。</td></tr>';
+        });
+    }
+
+    function closeModal() {
+      modal.style.display = 'none';
+      modalImg.src = '';
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      searchBtn.addEventListener('click', search);
+      search();
+    });
+  </script>
+</body>
+</html>
