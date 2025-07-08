@@ -46,3 +46,6 @@ set no_proxy=localhost,127.0.0.1,::1
 导入完成后运行web.bat就可以查询了。
 ![26](https://github.com/user-attachments/assets/dbf1f585-4260-4577-b177-20e485ed7c5f)
 ![25](https://github.com/user-attachments/assets/4bb5bc8f-c344-4769-865a-b519017d0532)
+
+
+仅供娱乐
