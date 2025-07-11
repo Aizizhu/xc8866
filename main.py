@@ -10,7 +10,6 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as XLImage
 from PIL import Image as PILImage
 from multiprocessing import Pool, Manager
-import signal
 import sys
 
 headers = {
@@ -34,17 +33,16 @@ def sanitize_filename(name):
 def load_crawled():
     if os.path.exists(crawled_file):
         with open(crawled_file, 'r', encoding='utf-8') as f:
-            return [line.strip().split('\t')[0] for line in f]
-    return []
+            return set(line.strip().split('\t')[0] for line in f)
+    return set()
 
 def save_crawled(post_id, post_url):
     with open(crawled_file, 'a', encoding='utf-8') as f:
         f.write(post_id + '\t' + post_url + '\n')
 
 def extract_info_from_table(soup):
-    # 你的表格解析逻辑
-    price = qq = wechat = phone = ''
     table = soup.find('table')
+    price = qq = wechat = phone = ''
     if table:
         rows = table.find_all('tr')
         for row in rows:
@@ -83,22 +81,24 @@ def parse_post(post_url):
         img_tags = soup.find_all('img', class_='img-fluid')
         for img_tag in img_tags:
             src = img_tag.get('src', '')
-            # 排除占位图
+            # 过滤无效或占位图片
+            if not src.startswith('http'):
+                continue
             if any(x in src for x in ['file/zwzp.jpg', 'default.jpg', 'nopic.jpg']):
                 continue
-            # 要求有 data-toggle 和 data-target 属性
+            # 必须含有 data-toggle 和 data-target 属性
             if not (img_tag.has_attr('data-toggle') and img_tag.has_attr('data-target')):
                 continue
-            imgs_with_alt.append(img_tag)
+            imgs_with_alt.append((img_tag, ''))
 
         return title, price, qq, wechat, phone, imgs_with_alt
     except Exception as e:
         log(f'访问帖子失败: {post_url} 错误: {e}')
         return None, None, None, None, None, []
 
-def download_images(img_tags, img_dir):
+def download_images(imgs_with_alt, img_dir, downloaded_images_shared):
     image_files = []
-    for i, img in enumerate(img_tags):
+    for i, (img, _) in enumerate(imgs_with_alt):
         img_url = img.get('src')
         if not img_url:
             continue
@@ -107,17 +107,16 @@ def download_images(img_tags, img_dir):
         elif img_url.startswith('/'):
             img_url = 'https://xc8866.com' + img_url
 
+        # 跳过已经下载过的图片
+        if img_url in downloaded_images_shared:
+            continue
+
         ext = os.path.splitext(img_url)[-1].lower()
         if not re.match(r'\.(jpg|jpeg|png|gif|bmp|webp)$', ext):
             ext = '.jpg'
 
         img_name = f'{i}_image{ext}'
         img_path = os.path.join(img_dir, img_name)
-
-        if os.path.exists(img_path) and os.path.getsize(img_path) > 0:
-            log(f'图片已存在，跳过下载: {img_name}')
-            image_files.append(img_path)
-            continue
 
         try:
             resp = requests.get(img_url, headers=headers, timeout=15, stream=True)
@@ -126,6 +125,7 @@ def download_images(img_tags, img_dir):
                 for chunk in resp.iter_content(1024):
                     f.write(chunk)
             image_files.append(img_path)
+            downloaded_images_shared.append(img_url)  # 记录已下载链接
             log(f'  下载图片 {i+1}: {img_name}')
             time.sleep(random.uniform(0.2, 0.4))
         except Exception as e:
@@ -176,91 +176,120 @@ def get_page_threads(soup):
     return links
 
 def crawl_page(args):
-    page_num, start_url, crawled_posts_list = args
+    page_number, page_url, crawled_posts_shared, downloaded_images_shared = args
+    log(f"开始爬取第 {page_number} 页：{page_url}")
+
     try:
-        page_url = re.sub(r'forum-23-\d+\.htm', f'forum-23-{page_num}.htm', start_url)
-        log(f'开始爬取第 {page_num} 页：{page_url}')
         res = requests.get(page_url, headers=headers, timeout=15)
         res.raise_for_status()
         soup = BeautifulSoup(res.content, 'html.parser')
 
         links = get_page_threads(soup)
         if not links:
-            log(f"⚠️ 第 {page_num} 页没有获取到帖子链接")
+            log(f"⚠️ 第 {page_number} 页无帖子链接，跳过")
             return []
 
-        page_data = []
-        # 使用本地set来提高查重效率
-        crawled_posts_set = set(crawled_posts_list)
+        page_results = []
 
         for idx, link in enumerate(links, 1):
             post_id = link.replace('.htm', '').replace('/', '_')
-            if post_id in crawled_posts_set:
-                log(f'跳过已爬取帖子 {post_id} ({link})')
+            if post_id in crawled_posts_shared:
+                log(f"跳过已爬取帖子 {post_id} ({link})")
                 continue
 
             post_url = f'https://xc8866.com/{link}'
-            log(f'➡️ 正在爬取帖子 {idx}/{len(links)}: {post_url}')
+            log(f"  正在爬取帖子 {idx}/{len(links)}: {post_url}")
+
             title, price, qq, wechat, phone, imgs_with_alt = parse_post(post_url)
             if title is None:
-                log(f"⚠️ 帖子解析失败，跳过: {post_url}")
+                log(f"  ⚠️ 帖子解析失败，跳过: {post_url}")
                 continue
+
+            log(f"    标题: {title}")
 
             thread_img_dir = os.path.join(base_img_dir, sanitize_filename(post_id))
             os.makedirs(thread_img_dir, exist_ok=True)
 
-            image_files = download_images(imgs_with_alt, thread_img_dir)
-            log(f'  下载图片 {len(image_files)} 张')
+            image_files = download_images(imgs_with_alt, thread_img_dir, downloaded_images_shared)
+            log(f"    下载图片 {len(image_files)} 张")
 
             row = [title, price, qq, wechat, phone, '', '', '', post_url]
-            page_data.append({'row': row, 'images': image_files})
+            page_results.append({'row': row, 'images': image_files})
 
-            # 更新共享爬取列表
-            crawled_posts_list.append(post_id)
-            crawled_posts_set.add(post_id)
+            crawled_posts_shared.append(post_id)
             save_crawled(post_id, post_url)
 
             time.sleep(random.uniform(0.8, 1.5))
 
-        return page_data
+        return page_results
 
     except Exception as e:
-        log(f"爬取页面失败: {page_url} 错误: {e}")
+        log(f"爬取第 {page_number} 页失败: {page_url} 错误: {e}")
         return []
 
-def signal_handler(sig, frame):
-    log('⏸️ 检测到手动终止 (Ctrl+C)，准备退出...')
-    sys.exit(0)
-
 def main():
-    import argparse
-    parser = argparse.ArgumentParser(description="多进程爬虫")
-    parser.add_argument('--start-url', type=str, required=True, help='起始页链接，如 https://xc8866.com/forum-23-1.htm?tagids=151_0_0_0')
-    parser.add_argument('--total-pages', type=int, required=True, help='需要爬取多少页')
-    parser.add_argument('--processes', type=int, default=4, help='进程数')
-    args = parser.parse_args()
+    start_url = input("请输入起始页链接（如 https://xc8866.com/forum-23-1.htm?tagids=151_0_0_0）:")
+    total_pages = input("请输入总共爬取页数（数字）:")
+    max_workers = input("请输入同时爬取的最大进程数（默认6，建议不要太大）:")
 
-    signal.signal(signal.SIGINT, signal_handler)
+    try:
+        total_pages = int(total_pages)
+    except:
+        log("❌ 总页数输入无效，退出")
+        return
+
+    try:
+        max_workers = int(max_workers)
+        if max_workers <= 0:
+            max_workers = 6
+    except:
+        max_workers = 6
+
+    match = re.search(r'forum-23-(\d+)\.htm', start_url)
+    if not match:
+        log("❌ 起始链接格式不正确，程序退出")
+        return
+
+    start_page = int(match.group(1))
+    page_urls = []
+    for i in range(start_page, start_page + total_pages):
+        page_url = re.sub(r'forum-23-(\d+)\.htm', f'forum-23-{i}.htm', start_url)
+        page_urls.append(page_url)
 
     manager = Manager()
-    crawled_posts_list = manager.list(load_crawled())
+    crawled_posts_shared = manager.list(load_crawled())
+    downloaded_images_shared = manager.list()
 
-    pool = Pool(processes=args.processes)
-    task_args = [(page_num, args.start_url, crawled_posts_list) for page_num in range(1, args.total_pages + 1)]
+    args_list = []
+    for i, url in enumerate(page_urls, start=start_page):
+        args_list.append((i, url, crawled_posts_shared, downloaded_images_shared))
+
+    pool = Pool(processes=max_workers)
 
     all_results = []
+
     try:
-        for result in pool.imap_unordered(crawl_page, task_args):
+        for result in pool.imap_unordered(crawl_page, args_list):
             if result:
                 append_data_to_excel(result, output_xlsx)
                 all_results.extend(result)
+
+        pool.close()
+        pool.join()
     except KeyboardInterrupt:
-        log("⏸️ 主进程捕获到Ctrl+C，准备退出...")
+        log("⏸️ 主进程捕获 Ctrl+C，准备退出...")
 
-    pool.close()
-    pool.join()
+        pool.terminate()
+        pool.join()
 
-    log(f"✅ 爬虫结束，共爬取帖子数：{len(crawled_posts_list)}")
+        if all_results:
+            append_data_to_excel(all_results, output_xlsx)
+            log(f"✅ 已保存当前爬取数据到Excel，数量：{len(all_results)} 条。")
+
+        log("程序已安全退出。")
+        sys.exit(0)
+
+    log("✅ 爬虫运行结束")
 
 if __name__ == '__main__':
     main()
