@@ -1,6 +1,5 @@
 from flask import Flask, request, jsonify, send_from_directory, render_template
 import sqlite3
-import os
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 
@@ -22,11 +21,11 @@ def api_data():
         like = f"%{global_q}%"
         conditions.append("""
             (
-              标题 LIKE ? OR
-              CAST(价格 AS TEXT) LIKE ? OR
-              QQ LIKE ? OR
-              微信 LIKE ? OR
-              手机 LIKE ?
+              title LIKE ? OR
+              CAST(price AS TEXT) LIKE ? OR
+              qq LIKE ? OR
+              wechat LIKE ? OR
+              phone LIKE ?
             )
         """)
         params.extend([like] * 5)
@@ -34,7 +33,7 @@ def api_data():
     if price_min:
         try:
             price_min_val = float(price_min)
-            conditions.append("价格 >= ?")
+            conditions.append("price >= ?")
             params.append(price_min_val)
         except ValueError:
             return jsonify([])
@@ -42,7 +41,7 @@ def api_data():
     if price_max:
         try:
             price_max_val = float(price_max)
-            conditions.append("价格 <= ?")
+            conditions.append("price <= ?")
             params.append(price_max_val)
         except ValueError:
             return jsonify([])
@@ -50,7 +49,7 @@ def api_data():
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
     else:
-        # 无条件避免返回全表
+        # 防止全表返回
         return jsonify([])
 
     conn = sqlite3.connect('data.db')
