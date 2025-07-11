@@ -9,7 +9,9 @@ from datetime import datetime
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as XLImage
 from PIL import Image as PILImage
-import argparse
+from multiprocessing import Pool, Manager
+import signal
+import sys
 
 headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
@@ -32,16 +34,17 @@ def sanitize_filename(name):
 def load_crawled():
     if os.path.exists(crawled_file):
         with open(crawled_file, 'r', encoding='utf-8') as f:
-            return set(line.strip().split('\t')[0] for line in f)
-    return set()
+            return [line.strip().split('\t')[0] for line in f]
+    return []
 
 def save_crawled(post_id, post_url):
     with open(crawled_file, 'a', encoding='utf-8') as f:
         f.write(post_id + '\t' + post_url + '\n')
 
 def extract_info_from_table(soup):
-    table = soup.find('table')
+    # 你的表格解析逻辑
     price = qq = wechat = phone = ''
+    table = soup.find('table')
     if table:
         rows = table.find_all('tr')
         for row in rows:
@@ -79,18 +82,23 @@ def parse_post(post_url):
         imgs_with_alt = []
         img_tags = soup.find_all('img', class_='img-fluid')
         for img_tag in img_tags:
-            imgs_with_alt.append((img_tag, ''))
+            src = img_tag.get('src', '')
+            # 排除占位图
+            if any(x in src for x in ['file/zwzp.jpg', 'default.jpg', 'nopic.jpg']):
+                continue
+            # 要求有 data-toggle 和 data-target 属性
+            if not (img_tag.has_attr('data-toggle') and img_tag.has_attr('data-target')):
+                continue
+            imgs_with_alt.append(img_tag)
 
         return title, price, qq, wechat, phone, imgs_with_alt
     except Exception as e:
         log(f'访问帖子失败: {post_url} 错误: {e}')
         return None, None, None, None, None, []
 
-def download_images(imgs_with_alt, img_dir):
+def download_images(img_tags, img_dir):
     image_files = []
-    for i, (img, _) in enumerate(imgs_with_alt):
-        if i >= 3:
-            break
+    for i, img in enumerate(img_tags):
         img_url = img.get('src')
         if not img_url:
             continue
@@ -105,6 +113,11 @@ def download_images(imgs_with_alt, img_dir):
 
         img_name = f'{i}_image{ext}'
         img_path = os.path.join(img_dir, img_name)
+
+        if os.path.exists(img_path) and os.path.getsize(img_path) > 0:
+            log(f'图片已存在，跳过下载: {img_name}')
+            image_files.append(img_path)
+            continue
 
         try:
             resp = requests.get(img_url, headers=headers, timeout=15, stream=True)
@@ -162,100 +175,92 @@ def get_page_threads(soup):
     links = [t['data-href'] for t in threads if t.has_attr('data-href')]
     return links
 
-def crawl_pages(start_url, total_pages):
-    current_url = start_url
-    match = re.search(r'forum-23-(\d+)\.htm', current_url)
-    if not match:
-        log("❌ 起始链接格式不正确")
-        return
-    start_page = int(match.group(1))
-    target_page = start_page + total_pages - 1
-    current_page = start_page
-    crawled_posts = load_crawled()
-    all_page_data = []
-    page_data = []
-
+def crawl_page(args):
+    page_num, start_url, crawled_posts_list = args
     try:
-        while current_url and current_page <= target_page:
-            log(f'📄 正在爬取第 {current_page} 页：{current_url}')
-            try:
-                res = requests.get(current_url, headers=headers, timeout=15)
-                res.raise_for_status()
-                soup = BeautifulSoup(res.content, 'html.parser')
+        page_url = re.sub(r'forum-23-\d+\.htm', f'forum-23-{page_num}.htm', start_url)
+        log(f'开始爬取第 {page_num} 页：{page_url}')
+        res = requests.get(page_url, headers=headers, timeout=15)
+        res.raise_for_status()
+        soup = BeautifulSoup(res.content, 'html.parser')
 
-                links = get_page_threads(soup)
-                if not links:
-                    log(f"⚠️ 第 {current_page} 页没有获取到帖子链接，跳过")
-                    break
+        links = get_page_threads(soup)
+        if not links:
+            log(f"⚠️ 第 {page_num} 页没有获取到帖子链接")
+            return []
 
-                log(f'🔍 本页共发现 {len(links)} 条帖子链接')
+        page_data = []
+        # 使用本地set来提高查重效率
+        crawled_posts_set = set(crawled_posts_list)
 
-                page_data = []  # 当前页数据清空
+        for idx, link in enumerate(links, 1):
+            post_id = link.replace('.htm', '').replace('/', '_')
+            if post_id in crawled_posts_set:
+                log(f'跳过已爬取帖子 {post_id} ({link})')
+                continue
 
-                for idx, link in enumerate(links, 1):
-                    post_id = link.replace('.htm', '').replace('/', '_')
-                    if post_id in crawled_posts:
-                        log(f'跳过已爬取帖子 {post_id} ({link})')
-                        continue
+            post_url = f'https://xc8866.com/{link}'
+            log(f'➡️ 正在爬取帖子 {idx}/{len(links)}: {post_url}')
+            title, price, qq, wechat, phone, imgs_with_alt = parse_post(post_url)
+            if title is None:
+                log(f"⚠️ 帖子解析失败，跳过: {post_url}")
+                continue
 
-                    post_url = f'https://xc8866.com/{link}'
-                    log(f'➡️ 正在爬取帖子 {idx}/{len(links)}: {post_url}')
-                    title, price, qq, wechat, phone, imgs_with_alt = parse_post(post_url)
-                    if title is None:
-                        log(f"⚠️ 帖子解析失败，跳过: {post_url}")
-                        continue
+            thread_img_dir = os.path.join(base_img_dir, sanitize_filename(post_id))
+            os.makedirs(thread_img_dir, exist_ok=True)
 
-                    log(f'  标题: {title}')
-                    thread_img_dir = os.path.join(base_img_dir, sanitize_filename(post_id))
-                    os.makedirs(thread_img_dir, exist_ok=True)
+            image_files = download_images(imgs_with_alt, thread_img_dir)
+            log(f'  下载图片 {len(image_files)} 张')
 
-                    image_files = download_images(imgs_with_alt, thread_img_dir)
-                    log(f'  下载图片 {len(image_files)} 张')
+            row = [title, price, qq, wechat, phone, '', '', '', post_url]
+            page_data.append({'row': row, 'images': image_files})
 
-                    row = [title, price, qq, wechat, phone, '', '', '', post_url]
-                    page_data.append({'row': row, 'images': image_files})
+            # 更新共享爬取列表
+            crawled_posts_list.append(post_id)
+            crawled_posts_set.add(post_id)
+            save_crawled(post_id, post_url)
 
-                    save_crawled(post_id, post_url)
-                    time.sleep(random.uniform(0.8, 1.5))
+            time.sleep(random.uniform(0.8, 1.5))
 
-                if page_data:
-                    all_page_data.extend(page_data)
-                    append_data_to_excel(page_data, output_xlsx)
+        return page_data
 
-                next_url = get_next_page_url(soup, current_url)
-                if not next_url:
-                    log("没有找到下一页链接，结束爬取")
-                    break
+    except Exception as e:
+        log(f"爬取页面失败: {page_url} 错误: {e}")
+        return []
 
-                current_url = next_url
-                current_page += 1
-
-            except Exception as e:
-                log(f"爬取页面失败: {current_url} 错误: {e}")
-                break
-
-    except KeyboardInterrupt:
-        log("⏸️ 检测到手动终止 (Ctrl+C)，开始保存当前数据...")
-        combined_data = all_page_data
-        if page_data:
-            combined_data += page_data
-        if combined_data:
-            append_data_to_excel(combined_data, output_xlsx)
-            log(f"✅ 已保存当前爬取数据到Excel，数量：{len(combined_data)} 条。")
-        else:
-            log("⚠️ 当前无数据，无需保存。")
-        log("程序已安全退出。")
-        exit(0)
-
-    log("✅ 爬虫运行结束")
+def signal_handler(sig, frame):
+    log('⏸️ 检测到手动终止 (Ctrl+C)，准备退出...')
+    sys.exit(0)
 
 def main():
-    parser = argparse.ArgumentParser(description="爬虫起始页链接和总爬取页数")
+    import argparse
+    parser = argparse.ArgumentParser(description="多进程爬虫")
     parser.add_argument('--start-url', type=str, required=True, help='起始页链接，如 https://xc8866.com/forum-23-1.htm?tagids=151_0_0_0')
-    parser.add_argument('--total-pages', type=int, required=True, help='从起始页开始，总共需要爬多少页')
+    parser.add_argument('--total-pages', type=int, required=True, help='需要爬取多少页')
+    parser.add_argument('--processes', type=int, default=4, help='进程数')
     args = parser.parse_args()
 
-    crawl_pages(args.start_url, args.total_pages)
+    signal.signal(signal.SIGINT, signal_handler)
+
+    manager = Manager()
+    crawled_posts_list = manager.list(load_crawled())
+
+    pool = Pool(processes=args.processes)
+    task_args = [(page_num, args.start_url, crawled_posts_list) for page_num in range(1, args.total_pages + 1)]
+
+    all_results = []
+    try:
+        for result in pool.imap_unordered(crawl_page, task_args):
+            if result:
+                append_data_to_excel(result, output_xlsx)
+                all_results.extend(result)
+    except KeyboardInterrupt:
+        log("⏸️ 主进程捕获到Ctrl+C，准备退出...")
+
+    pool.close()
+    pool.join()
+
+    log(f"✅ 爬虫结束，共爬取帖子数：{len(crawled_posts_list)}")
 
 if __name__ == '__main__':
     main()
