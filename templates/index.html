@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <title>交友信息</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body {
       font-family: sans-serif;
@@ -25,6 +26,9 @@
       border: 1px solid #ccc;
       padding: 8px;
       text-align: center;
+    }
+    th {
+      cursor: default;
     }
     img {
       max-width: 100px;
@@ -72,7 +76,7 @@
     <thead>
       <tr>
         <th>标题</th>
-        <th>价格</th>
+        <th id="priceHeader" style="cursor: pointer;">价格</th>
         <th>QQ</th>
         <th>微信</th>
         <th>手机</th>
@@ -93,6 +97,10 @@
     const tbody = document.querySelector('#resultTable tbody');
     const modal = document.getElementById('imgModal');
     const modalImg = document.getElementById('modalImg');
+    const priceHeader = document.getElementById('priceHeader');
+
+    let currentSortOrder = null; // null, 'asc', 'desc'
+    let cachedData = [];
 
     function search() {
       const global = document.getElementById('global').value.trim();
@@ -107,41 +115,61 @@
       fetch(`/api/data?${params.toString()}`)
         .then((res) => res.json())
         .then((data) => {
-          tbody.innerHTML = '';
-
           if (!data.length) {
             tbody.innerHTML = '<tr><td colspan="8">无匹配数据</td></tr>';
             return;
           }
-
-          data.forEach((item) => {
-            const tr = document.createElement('tr');
-
-            tr.innerHTML = `
-              <td><a href="${item['帖子链接'] || '#'}" target="_blank" rel="noopener noreferrer">${item['标题'] || ''}</a></td>
-              <td>${item['价格'] || ''}</td>
-              <td>${item['QQ'] || ''}</td>
-              <td>${item['微信'] || ''}</td>
-              <td>${item['手机'] || ''}</td>
-              <td>${item['图片1'] ? `<img src="${item['图片1']}" alt="图片1" />` : ''}</td>
-              <td>${item['图片2'] ? `<img src="${item['图片2']}" alt="图片2" />` : ''}</td>
-              <td>${item['图片3'] ? `<img src="${item['图片3']}" alt="图片3" />` : ''}</td>
-            `;
-
-            tr.querySelectorAll('img').forEach(img => {
-              img.style.cursor = 'pointer';
-              img.addEventListener('click', () => {
-                modalImg.src = img.src;
-                modal.style.display = 'flex';
-              });
-            });
-
-            tbody.appendChild(tr);
-          });
+          cachedData = data;
+          if (currentSortOrder) {
+            sortByPrice(); // 如果已排序，则继续使用排序渲染
+          } else {
+            renderTable(cachedData);
+          }
         })
         .catch(() => {
           tbody.innerHTML = '<tr><td colspan="8">请求出错，请稍后重试。</td></tr>';
         });
+    }
+
+    function renderTable(data) {
+      tbody.innerHTML = '';
+
+      data.forEach((item) => {
+        const tr = document.createElement('tr');
+
+        tr.innerHTML = `
+          <td><a href="${item['帖子链接'] || '#'}" target="_blank" rel="noopener noreferrer">${item['标题'] || ''}</a></td>
+          <td>${item['价格'] || ''}</td>
+          <td>${item['QQ'] || ''}</td>
+          <td>${item['微信'] || ''}</td>
+          <td>${item['手机'] || ''}</td>
+          <td>${item['图片1'] ? `<img src="${item['图片1']}" alt="图片1" />` : ''}</td>
+          <td>${item['图片2'] ? `<img src="${item['图片2']}" alt="图片2" />` : ''}</td>
+          <td>${item['图片3'] ? `<img src="${item['图片3']}" alt="图片3" />` : ''}</td>
+        `;
+
+        tr.querySelectorAll('img').forEach(img => {
+          img.addEventListener('click', () => {
+            modalImg.src = img.src;
+            modal.style.display = 'flex';
+          });
+        });
+
+        tbody.appendChild(tr);
+      });
+
+      // 更新排序箭头
+      priceHeader.textContent = '价格 ' + (currentSortOrder === 'asc' ? '▲' : '▼');
+    }
+
+    function sortByPrice() {
+      currentSortOrder = currentSortOrder === 'asc' ? 'desc' : 'asc';
+      cachedData.sort((a, b) => {
+        const priceA = parseFloat(a['价格']) || 0;
+        const priceB = parseFloat(b['价格']) || 0;
+        return currentSortOrder === 'asc' ? priceA - priceB : priceB - priceA;
+      });
+      renderTable(cachedData);
     }
 
     function closeModal() {
@@ -151,8 +179,10 @@
 
     window.addEventListener('DOMContentLoaded', () => {
       searchBtn.addEventListener('click', search);
+      priceHeader.addEventListener('click', sortByPrice);
       search();
     });
   </script>
 </body>
 </html>
+s
