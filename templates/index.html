@@ -99,7 +99,7 @@
     const modalImg = document.getElementById('modalImg');
     const priceHeader = document.getElementById('priceHeader');
 
-    let currentSortOrder = null; // null, 'asc', 'desc'
+    let currentSortOrder = null; // null / 'asc' / 'desc'
     let cachedData = [];
 
     function search() {
@@ -120,11 +120,8 @@
             return;
           }
           cachedData = data;
-          if (currentSortOrder) {
-            sortByPrice(); // 如果已排序，则继续使用排序渲染
-          } else {
-            renderTable(cachedData);
-          }
+          currentSortOrder = null; // 每次新查重置排序状态
+          renderTable(cachedData);
         })
         .catch(() => {
           tbody.innerHTML = '<tr><td colspan="8">请求出错，请稍后重试。</td></tr>';
@@ -159,16 +156,24 @@
       });
 
       // 更新排序箭头
-      priceHeader.textContent = '价格 ' + (currentSortOrder === 'asc' ? '▲' : '▼');
+      if (currentSortOrder) {
+        priceHeader.textContent = '价格 ' + (currentSortOrder === 'asc' ? '▲' : '▼');
+      } else {
+        priceHeader.textContent = '价格';
+      }
     }
 
     function sortByPrice() {
+      if (!cachedData.length) return;
+
       currentSortOrder = currentSortOrder === 'asc' ? 'desc' : 'asc';
+
       cachedData.sort((a, b) => {
         const priceA = parseFloat(a['价格']) || 0;
         const priceB = parseFloat(b['价格']) || 0;
         return currentSortOrder === 'asc' ? priceA - priceB : priceB - priceA;
       });
+
       renderTable(cachedData);
     }
 
@@ -185,4 +190,3 @@
   </script>
 </body>
 </html>
-s
