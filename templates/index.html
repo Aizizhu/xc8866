@@ -3,65 +3,25 @@
 <head>
   <meta charset="UTF-8" />
   <title>交友信息</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body {
-      font-family: sans-serif;
-      padding: 20px;
-    }
-    input {
-      margin-right: 10px;
-      padding: 5px 8px;
-      width: 120px;
-    }
-    button {
-      padding: 6px 12px;
-    }
-    table {
-      border-collapse: collapse;
-      width: 100%;
-      margin-top: 20px;
-    }
-    th, td {
-      border: 1px solid #ccc;
-      padding: 8px;
-      text-align: center;
-    }
-    th {
-      cursor: default;
-    }
-    img {
-      max-width: 100px;
-      max-height: 100px;
-      cursor: pointer;
-      transition: transform 0.3s ease;
-    }
-    img:hover {
-      transform: scale(1.1);
-    }
-    a {
-      color: #0366d6;
-      text-decoration: none;
-    }
-    a:hover {
-      text-decoration: underline;
-    }
-
+    body { font-family: sans-serif; padding: 20px; }
+    input { margin-right: 10px; padding: 5px 8px; width: 120px; }
+    button { padding: 6px 12px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+    img { max-width: 100px; max-height: 100px; cursor: pointer; transition: transform 0.3s ease; }
+    img:hover { transform: scale(1.1); }
+    a { color: #0366d6; text-decoration: none; }
+    a:hover { text-decoration: underline; }
     #imgModal {
-      display: none;
-      position: fixed;
-      z-index: 9999;
+      display: none; position: fixed; z-index: 9999;
       left: 0; top: 0; right: 0; bottom: 0;
       background: rgba(0,0,0,0.8);
-      justify-content: center;
-      align-items: center;
+      justify-content: center; align-items: center;
     }
-
     #imgModal img {
-      max-width: 90vw;
-      max-height: 90vh;
-      box-shadow: 0 0 10px #000;
-      border-radius: 5px;
+      max-width: 90vw; max-height: 90vh;
+      box-shadow: 0 0 10px #000; border-radius: 5px;
     }
   </style>
 </head>
@@ -99,7 +59,7 @@
     const modalImg = document.getElementById('modalImg');
     const priceHeader = document.getElementById('priceHeader');
 
-    let currentSortOrder = null; // null / 'asc' / 'desc'
+    let currentSortOrder = null;
     let cachedData = [];
 
     function search() {
@@ -113,14 +73,17 @@
       if (price_max) params.append('price_max', price_max);
 
       fetch(`/api/data?${params.toString()}`)
-        .then((res) => res.json())
-        .then((data) => {
+        .then(res => res.json())
+        .then(data => {
           if (!data.length) {
             tbody.innerHTML = '<tr><td colspan="8">无匹配数据</td></tr>';
+            cachedData = [];
+            currentSortOrder = null;
+            updatePriceHeader();
             return;
           }
           cachedData = data;
-          currentSortOrder = null; // 每次新查重置排序状态
+          currentSortOrder = null;
           renderTable(cachedData);
         })
         .catch(() => {
@@ -130,50 +93,42 @@
 
     function renderTable(data) {
       tbody.innerHTML = '';
-
-      data.forEach((item) => {
+      data.forEach(item => {
         const tr = document.createElement('tr');
-
         tr.innerHTML = `
-          <td><a href="${item['帖子链接'] || '#'}" target="_blank" rel="noopener noreferrer">${item['标题'] || ''}</a></td>
-          <td>${item['价格'] || ''}</td>
-          <td>${item['QQ'] || ''}</td>
-          <td>${item['微信'] || ''}</td>
-          <td>${item['手机'] || ''}</td>
-          <td>${item['图片1'] ? `<img src="${item['图片1']}" alt="图片1" />` : ''}</td>
-          <td>${item['图片2'] ? `<img src="${item['图片2']}" alt="图片2" />` : ''}</td>
-          <td>${item['图片3'] ? `<img src="${item['图片3']}" alt="图片3" />` : ''}</td>
+          <td><a href="${item.post_link || '#'}" target="_blank" rel="noopener noreferrer">${item.title || ''}</a></td>
+          <td>${item.price || ''}</td>
+          <td>${item.qq || ''}</td>
+          <td>${item.wechat || ''}</td>
+          <td>${item.phone || ''}</td>
+          <td>${item.image1 ? `<img src="${item.image1}" alt="图片1" />` : ''}</td>
+          <td>${item.image2 ? `<img src="${item.image2}" alt="图片2" />` : ''}</td>
+          <td>${item.image3 ? `<img src="${item.image3}" alt="图片3" />` : ''}</td>
         `;
-
         tr.querySelectorAll('img').forEach(img => {
           img.addEventListener('click', () => {
             modalImg.src = img.src;
             modal.style.display = 'flex';
           });
         });
-
         tbody.appendChild(tr);
       });
+      updatePriceHeader();
+    }
 
-      // 更新排序箭头
-      if (currentSortOrder) {
-        priceHeader.textContent = '价格 ' + (currentSortOrder === 'asc' ? '▲' : '▼');
-      } else {
-        priceHeader.textContent = '价格';
-      }
+    function updatePriceHeader() {
+      priceHeader.textContent = currentSortOrder === 'asc' ? '价格 ▲' :
+                                currentSortOrder === 'desc' ? '价格 ▼' : '价格';
     }
 
     function sortByPrice() {
       if (!cachedData.length) return;
-
       currentSortOrder = currentSortOrder === 'asc' ? 'desc' : 'asc';
-
       cachedData.sort((a, b) => {
-        const priceA = parseFloat(a['价格']) || 0;
-        const priceB = parseFloat(b['价格']) || 0;
-        return currentSortOrder === 'asc' ? priceA - priceB : priceB - priceA;
+        const pa = parseFloat(a.price) || 0;
+        const pb = parseFloat(b.price) || 0;
+        return currentSortOrder === 'asc' ? pa - pb : pb - pa;
       });
-
       renderTable(cachedData);
     }
 
