@@ -53,8 +53,8 @@ for idx, row in df.iterrows():
     excel_row_num = idx + 2  # Excel表头第1行，数据从第2行开始
     imgs = image_map.get(excel_row_num, [])
 
-    # 保存前三张图片
-    for i, (cell, img) in enumerate(imgs[:3]):
+    # 保存图片
+    for i, (cell, img) in enumerate(imgs[:4]):
         img_path = os.path.join(folder_path, f'F{i+1}.png')
         with open(img_path, 'wb') as f:
             f.write(img._data())
