@@ -1,51 +1,70 @@
 # xc8866
-从xc8866网站爬取公开交友信息整合成表格和简易查询网页
-https://xc8866.com/
+从 xc8866 网站爬取公开交友信息，导出 Excel，并可进一步导入 SQLite 后用网页查询。
 
+> 仅供学习与娱乐，请遵守目标网站规则与法律法规。
 
-环境要求:
-python3.10.x
+## 环境要求
+- Python 3.10+
+- 建议使用 `venv`
 
-需要使用venv
-
-命令：python -m venv venv
-
-call venv\Scripts\activate
-
+```bash
+python -m venv venv
+# Windows
+venv\Scripts\activate
+# macOS/Linux
+source venv/bin/activate
 pip install -r requirements.txt
+```
 
+## 代理设置（可选）
+如果网络环境需要代理，可在 `start.bat` 里按需配置：
 
-代理要求：
-
-在start.bat内有
-
+```bat
 set http_proxy=http://127.0.0.1:7890
-
 set https_proxy=http://127.0.0.1:7890
-
 set no_proxy=localhost,127.0.0.1,::1
+```
 
-修改成自己的端口
+## 爬虫用法（重写版）
+重写后的 `main.py` 提供了更清晰的结构（配置对象 + 爬虫类），并支持可配置输出路径。
 
+```bash
+python main.py \
+  --start-url "https://xc8866.com/forum-23-1.htm" \
+  --total-pages 20 \
+  --threads 6
+```
 
-用法：
+### 参数说明
+- `--start-url`：起始论坛页（必须是 `forum-23-页码.htm`）
+- `--total-pages`：从起始页开始连续爬取多少页
+- `--threads`：并发线程数（默认 6）
+- `--output`：Excel 输出文件（默认 `output.xlsx`）
+- `--images-dir`：图片下载目录（默认 `images`）
+- `--state-file`：断点续传文件（默认 `crawled_posts.txt`）
+- `--flush-batch`：累计多少条写入一次 Excel（默认 10）
 
-使用start.bat开始，运行后粘贴需要开始的页面链接输入需要结束的页面数，会利用下一页按钮自动进入下一页直到设置的页面数为止。
+### 断点续传
+运行时会记录已爬帖子到 `crawled_posts.txt`。再次运行会自动跳过历史帖子，支持中断后续爬。
 
-![21](https://github.com/user-attachments/assets/7ae5e10c-cb51-4bf6-a79f-93578953b150)
+---
 
+## Excel 导入数据库
+爬虫完成后执行：
 
-中途可以ctrl+c停止，停止前会写入以爬取的内容到output.xlsx,同时会生成一个crawled_posts.txt，里面记录了已经爬取过的页面用来实现跳过重复页面和断点续传。
-![22](https://github.com/user-attachments/assets/edd80c2a-dc82-40dc-a569-7764b7928c04)
+```bash
+python import_excel.py
+```
 
+会将 `output.xlsx` 中的数据与图片导入到：
+- `data.db`
+- `static/images/...`
 
-爬取完成后运行db.bat将output内容导入库
-![23](https://github.com/user-attachments/assets/900e5c94-3f49-44d2-bc8f-93392500b5a9)
+## 启动查询网页
+```bash
+python app.py
+```
+然后打开浏览器访问：
+- `http://127.0.0.1:5000/`
 
-
-导入完成后运行web.bat就可以查询了。
-![26](https://github.com/user-attachments/assets/dbf1f585-4260-4577-b177-20e485ed7c5f)
-![25](https://github.com/user-attachments/assets/4bb5bc8f-c344-4769-865a-b519017d0532)
-
-
-仅供娱乐
+支持关键词查询、价格区间筛选、价格排序与图片放大查看。
