@@ -8,7 +8,7 @@ chcp 65001 >nul
 cd /d %~dp0
 
 REM 输入起始页链接和爬取总页数
-set /p start_url=请输入起始页链接（如 https://xc8866.com/forum-23-1.htm）:
+set /p start_url=请输入起始页链接（如 https://xc8866.com/topics/tag/193?page=1）:
 set /p total_pages=请输入总共爬取页数（数字）:
 set /p threads=请输入线程数（默认6，回车则6）:
 
