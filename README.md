@@ -30,13 +30,13 @@ set no_proxy=localhost,127.0.0.1,::1
 
 ```bash
 python main.py \
-  --start-url "https://xc8866.com/forum-23-1.htm" \
+  --start-url "https://xc8866.com/topics/tag/193?page=1" \
   --total-pages 20 \
   --threads 6
 ```
 
 ### 参数说明
-- `--start-url`：起始论坛页（必须是 `forum-23-页码.htm`）
+- `--start-url`：起始论坛页（需包含分页参数，如 `https://xc8866.com/topics/tag/193?page=1`）
 - `--total-pages`：从起始页开始连续爬取多少页
 - `--threads`：并发线程数（默认 6）
 - `--output`：Excel 输出文件（默认 `output.xlsx`）
