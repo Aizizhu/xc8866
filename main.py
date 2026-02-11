@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -99,45 +99,83 @@ class XC8866Crawler:
         return url
 
     @staticmethod
-    def extract_info_from_table(soup: BeautifulSoup) -> tuple[str, str, str, str]:
-        table = soup.find("table")
+    def extract_contact_by_regex(text: str, patterns: list[str]) -> str:
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        return ""
+
+    def extract_info_from_table(self, soup: BeautifulSoup) -> tuple[str, str, str, str]:
         price = qq = wechat = phone = ""
-        if not table:
-            return price, qq, wechat, phone
 
-        for row in table.find_all("tr"):
-            th = row.find("th")
-            td = row.find("td")
-            if not th or not td:
-                continue
-
-            label = th.get_text(strip=True)
-            value = td.get_text(strip=True)
+        def set_field(label: str, value: str) -> None:
+            nonlocal price, qq, wechat, phone
+            if not value:
+                return
             if "价格" in label and not price:
                 price = value
-            elif "QQ" in label and not qq:
+            elif "QQ" in label.upper() and not qq:
                 qq = value
             elif "微信" in label and not wechat:
                 wechat = value
-            elif "电话" in label or "手机" in label:
+            elif ("电话" in label or "手机" in label) and not phone:
                 phone = value
+
+        for row in soup.select("table tr"):
+            label = ""
+            label_el = row.find(["th", "td"])
+            value_el = label_el.find_next_sibling(["th", "td"]) if label_el else None
+            if label_el and value_el:
+                label = label_el.get_text(" ", strip=True)
+                value = value_el.get_text(" ", strip=True)
+                set_field(label, value)
+
+        for item in soup.select("dl dt, li, div"):
+            line = item.get_text(" ", strip=True)
+            if "：" not in line and ":" not in line:
+                continue
+            parts = re.split(r"[：:]", line, maxsplit=1)
+            if len(parts) != 2:
+                continue
+            set_field(parts[0], parts[1])
+
+        full_text = soup.get_text("\n", strip=True)
+        if not price:
+            price = self.extract_contact_by_regex(full_text, [r"价格\s*[：:]\s*([^\n\r]+)"])
+        if not qq:
+            qq = self.extract_contact_by_regex(full_text, [r"QQ\s*[：:]\s*([0-9A-Za-z_-]{5,20})"])
+        if not wechat:
+            wechat = self.extract_contact_by_regex(full_text, [r"微信\s*[：:]\s*([0-9A-Za-z_-]{5,40})"])
+        if not phone:
+            phone = self.extract_contact_by_regex(full_text, [r"(?:电话|手机)\s*[：:]\s*([0-9+\-\s]{7,20})"])
 
         return price, qq, wechat, phone
 
     def extract_images(self, soup: BeautifulSoup, page_url: str) -> list[str]:
         image_urls: list[str] = []
+        seen: set[str] = set()
         valid_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+        src_keys = ("src", "data-src", "data-original", "data-echo", "data-lazy-src")
 
-        for img in soup.find_all("img", class_="img-fluid"):
-            src = img.get("src", "").strip()
+        for img in soup.find_all("img"):
+            src = ""
+            for key in src_keys:
+                value = img.get(key, "").strip()
+                if value:
+                    src = value
+                    break
+
+            if not src:
+                srcset = img.get("srcset", "").strip()
+                if srcset:
+                    src = srcset.split(",")[0].strip().split(" ")[0]
+
             if not src:
                 continue
 
             src_lower = src.lower()
-            if any(x in src_lower for x in ("zwzp.jpg", "default.jpg", "nopic.jpg")):
-                continue
-
-            if not (img.has_attr("data-toggle") and img.has_attr("data-target")):
+            if any(x in src_lower for x in ("zwzp.jpg", "default.jpg", "nopic.jpg", "avatar", "logo", "icon")):
                 continue
 
             img_url = self.normalize_url(src, page_url)
@@ -145,7 +183,9 @@ class XC8866Crawler:
             if ext and ext not in valid_exts:
                 continue
 
-            image_urls.append(img_url)
+            if img_url not in seen:
+                seen.add(img_url)
+                image_urls.append(img_url)
 
         return image_urls
 
@@ -155,12 +195,16 @@ class XC8866Crawler:
             response.raise_for_status()
             soup = BeautifulSoup(response.content, "html.parser")
 
-            meta_desc = soup.find("meta", attrs={"name": "description"})
-            if meta_desc and meta_desc.get("content"):
-                title = meta_desc["content"].strip()
+            meta_title = soup.find("meta", attrs={"property": "og:title"})
+            if meta_title and meta_title.get("content"):
+                title = meta_title["content"].strip()
             else:
-                title_tag = soup.find("h4", class_="break-all font-weight-bold ")
-                title = title_tag.get_text(strip=True) if title_tag else "标题未找到"
+                meta_desc = soup.find("meta", attrs={"name": "description"})
+                if meta_desc and meta_desc.get("content"):
+                    title = meta_desc["content"].strip()
+                else:
+                    title_tag = soup.select_one("h1, h2, h3, h4.break-all, .thread-title, .topic-title")
+                    title = title_tag.get_text(" ", strip=True) if title_tag else "标题未找到"
 
             price, qq, wechat, phone = self.extract_info_from_table(soup)
             image_urls = self.extract_images(soup, post_url)
@@ -261,8 +305,38 @@ class XC8866Crawler:
 
     @staticmethod
     def get_page_threads(soup: BeautifulSoup) -> list[str]:
-        threads = soup.find_all("li", class_="media thread tap")
-        return [t["data-href"] for t in threads if t.has_attr("data-href")]
+        links: list[str] = []
+        seen: set[str] = set()
+
+        for thread in soup.select("li.media.thread.tap[data-href], li[data-href], [data-href]"):
+            href = thread.get("data-href", "").strip()
+            if href and href not in seen:
+                seen.add(href)
+                links.append(href)
+
+        selectors = [
+            'a[href*="/thread-"]',
+            'a[href*="/topics/"]',
+            'a[href*="/topic/"]',
+            'a[href$=".htm"]',
+        ]
+        for selector in selectors:
+            for anchor in soup.select(selector):
+                href = anchor.get("href", "").strip()
+                if not href:
+                    continue
+                if href.startswith("javascript:") or href.startswith("#"):
+                    continue
+                if href not in seen:
+                    seen.add(href)
+                    links.append(href)
+
+        return links
+
+    @staticmethod
+    def is_post_link(link: str) -> bool:
+        lower_link = link.lower()
+        return any(token in lower_link for token in ("/thread-", "/topic/", "/topics/")) or lower_link.endswith(".htm")
 
     def crawl_single_page(self, page_url: str, page_num: int, crawled_posts: set[str]) -> None:
         self.log(f"📄 线程爬取第 {page_num} 页：{page_url}")
@@ -273,7 +347,7 @@ class XC8866Crawler:
             response.raise_for_status()
             soup = BeautifulSoup(response.content, "html.parser")
 
-            links = self.get_page_threads(soup)
+            links = [link for link in self.get_page_threads(soup) if self.is_post_link(link)]
             if not links:
                 self.log(f"⚠️ 第 {page_num} 页没有获取到帖子链接，跳过")
                 return
@@ -317,16 +391,36 @@ class XC8866Crawler:
 
     @staticmethod
     def build_page_urls(start_url: str, total_pages: int) -> list[tuple[int, str]]:
-        match = re.search(r"forum-23-(\d+)\.htm", start_url)
-        if not match:
-            raise ValueError("起始链接格式不正确，应包含 forum-23-页码.htm")
+        parsed = urlparse(start_url)
+        query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+        query_map = dict(query_pairs)
 
-        start_page = int(match.group(1))
-        urls: list[tuple[int, str]] = []
-        for page_num in range(start_page, start_page + total_pages):
-            url = re.sub(r"forum-23-\d+\.htm", f"forum-23-{page_num}.htm", start_url)
-            urls.append((page_num, url))
-        return urls
+        if "page" in query_map:
+            try:
+                start_page = int(query_map["page"])
+            except ValueError as exc:
+                raise ValueError("起始链接中的 page 参数必须是数字") from exc
+
+            urls: list[tuple[int, str]] = []
+            for page_num in range(start_page, start_page + total_pages):
+                current_pairs = [
+                    (key, str(page_num) if key == "page" else value)
+                    for key, value in query_pairs
+                ]
+                rebuilt = parsed._replace(query=urlencode(current_pairs))
+                urls.append((page_num, urlunparse(rebuilt)))
+            return urls
+
+        match = re.search(r"forum-23-(\d+)\.htm", start_url)
+        if match:
+            start_page = int(match.group(1))
+            urls = []
+            for page_num in range(start_page, start_page + total_pages):
+                url = re.sub(r"forum-23-\d+\.htm", f"forum-23-{page_num}.htm", start_url)
+                urls.append((page_num, url))
+            return urls
+
+        raise ValueError("起始链接格式不正确，应包含 page 参数（如 ?page=1）")
 
     def crawl(self) -> None:
         crawled_posts = self.load_crawled()
